@@ -10,8 +10,6 @@ import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.provider.MediaStore;
-import android.view.View;
 import android.webkit.CookieManager;
 import android.webkit.GeolocationPermissions;
 import android.webkit.PermissionRequest;
@@ -24,16 +22,6 @@ import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.Toast;
 
-import androidx.core.app.ActivityCompat;
-import androidx.core.content.ContextCompat;
-import androidx.core.content.FileProvider;
-
-import java.io.File;
-import java.io.IOException;
-import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.Locale;
-
 public class MainActivity extends Activity {
     private static final String APP_URL = "https://provi1.gobiernodigital.site/";
     private static final int PERMISSION_REQUEST = 10;
@@ -41,7 +29,6 @@ public class MainActivity extends Activity {
 
     private WebView webView;
     private ValueCallback<Uri[]> filePathCallback;
-    private Uri cameraPhotoUri;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -130,9 +117,8 @@ public class MainActivity extends Activity {
             public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> callback, FileChooserParams params) {
                 if (filePathCallback != null) filePathCallback.onReceiveValue(null);
                 filePathCallback = callback;
-                Intent chooserIntent = buildFileChooserIntent();
                 try {
-                    startActivityForResult(chooserIntent, FILE_CHOOSER_REQUEST);
+                    startActivityForResult(params.createIntent(), FILE_CHOOSER_REQUEST);
                 } catch (ActivityNotFoundException e) {
                     filePathCallback = null;
                     Toast.makeText(MainActivity.this, "No se encontro camara o selector de archivos.", Toast.LENGTH_LONG).show();
@@ -143,46 +129,12 @@ public class MainActivity extends Activity {
         });
     }
 
-    private Intent buildFileChooserIntent() {
-        Intent contentIntent = new Intent(Intent.ACTION_GET_CONTENT);
-        contentIntent.addCategory(Intent.CATEGORY_OPENABLE);
-        contentIntent.setType("image/*");
-
-        Intent cameraIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
-        if (cameraIntent.resolveActivity(getPackageManager()) != null) {
-            try {
-                File photoFile = createImageFile();
-                cameraPhotoUri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", photoFile);
-                cameraIntent.putExtra(MediaStore.EXTRA_OUTPUT, cameraPhotoUri);
-                cameraIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-            } catch (IOException e) {
-                cameraPhotoUri = null;
-            }
-        }
-
-        Intent chooser = Intent.createChooser(contentIntent, "Tomar o seleccionar foto");
-        if (cameraPhotoUri != null) {
-            chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[]{cameraIntent});
-        }
-        return chooser;
-    }
-
-    private File createImageFile() throws IOException {
-        String stamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
-        File directory = getExternalCacheDir() != null ? getExternalCacheDir() : getCacheDir();
-        return File.createTempFile("PROVI_" + stamp + "_", ".jpg", directory);
-    }
-
     private void requestAppPermissions() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return;
         String[] permissions = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
                 ? new String[]{Manifest.permission.CAMERA, Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.POST_NOTIFICATIONS}
                 : new String[]{Manifest.permission.CAMERA, Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION};
-        ActivityCompat.requestPermissions(this, permissions, PERMISSION_REQUEST);
-    }
-
-    private boolean hasPermission(String permission) {
-        return ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED;
+        requestPermissions(permissions, PERMISSION_REQUEST);
     }
 
     @Override
@@ -190,18 +142,9 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode != FILE_CHOOSER_REQUEST || filePathCallback == null) return;
 
-        Uri[] result = null;
-        if (resultCode == RESULT_OK) {
-            if (data == null || data.getData() == null) {
-                if (cameraPhotoUri != null) result = new Uri[]{cameraPhotoUri};
-            } else {
-                result = new Uri[]{data.getData()};
-            }
-        }
-
+        Uri[] result = WebChromeClient.FileChooserParams.parseResult(resultCode, data);
         filePathCallback.onReceiveValue(result);
         filePathCallback = null;
-        cameraPhotoUri = null;
     }
 
     @Override
