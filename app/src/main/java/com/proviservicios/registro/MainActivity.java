@@ -43,9 +43,9 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        hideSystemBars();
         requestAppPermissions();
         configureWebView();
+        hideSystemBars();
         if (savedInstanceState == null) {
             webView.loadUrl(APP_URL);
         } else {
@@ -243,12 +243,16 @@ public class MainActivity extends Activity {
     }
 
     private void hideSystemBars() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            WindowInsetsController controller = getWindow().getInsetsController();
-            if (controller != null) {
-                controller.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
-                controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                WindowInsetsController controller = getWindow().getInsetsController();
+                if (controller != null) {
+                    controller.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
+                    controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                }
             }
+        } catch (RuntimeException ignored) {
+            // Some Android builds expose the insets controller late; legacy immersive flags below still work.
         }
         View decor = getWindow().getDecorView();
         decor.setSystemUiVisibility(
