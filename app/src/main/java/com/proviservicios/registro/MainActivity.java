@@ -3,6 +3,7 @@ package com.proviservicios.registro;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.ContentValues;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -10,6 +11,8 @@ import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.provider.MediaStore;
+import android.view.View;
 import android.webkit.CookieManager;
 import android.webkit.GeolocationPermissions;
 import android.webkit.PermissionRequest;
@@ -22,6 +25,10 @@ import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.Toast;
 
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
+
 public class MainActivity extends Activity {
     private static final String APP_URL = "https://provi1.gobiernodigital.site/";
     private static final int PERMISSION_REQUEST = 10;
@@ -29,10 +36,12 @@ public class MainActivity extends Activity {
 
     private WebView webView;
     private ValueCallback<Uri[]> filePathCallback;
+    private Uri cameraPhotoUri;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        hideSystemBars();
         requestAppPermissions();
         configureWebView();
         if (savedInstanceState == null) {
@@ -40,6 +49,12 @@ public class MainActivity extends Activity {
         } else {
             webView.restoreState(savedInstanceState);
         }
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) hideSystemBars();
     }
 
     @Override
@@ -118,7 +133,7 @@ public class MainActivity extends Activity {
                 if (filePathCallback != null) filePathCallback.onReceiveValue(null);
                 filePathCallback = callback;
                 try {
-                    startActivityForResult(params.createIntent(), FILE_CHOOSER_REQUEST);
+                    startActivityForResult(buildFileChooserIntent(params), FILE_CHOOSER_REQUEST);
                 } catch (ActivityNotFoundException e) {
                     filePathCallback = null;
                     Toast.makeText(MainActivity.this, "No se encontro camara o selector de archivos.", Toast.LENGTH_LONG).show();
@@ -127,6 +142,41 @@ public class MainActivity extends Activity {
                 return true;
             }
         });
+    }
+
+    private Intent buildFileChooserIntent(WebChromeClient.FileChooserParams params) {
+        Intent galleryIntent;
+        try {
+            galleryIntent = params.createIntent();
+        } catch (Exception e) {
+            galleryIntent = new Intent(Intent.ACTION_GET_CONTENT);
+            galleryIntent.addCategory(Intent.CATEGORY_OPENABLE);
+            galleryIntent.setType("image/*");
+        }
+
+        Intent cameraIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+        cameraPhotoUri = createCameraPhotoUri();
+        if (cameraPhotoUri != null) {
+            cameraIntent.putExtra(MediaStore.EXTRA_OUTPUT, cameraPhotoUri);
+            cameraIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        }
+
+        Intent chooser = Intent.createChooser(galleryIntent, "Tomar o seleccionar foto");
+        if (cameraIntent.resolveActivity(getPackageManager()) != null && cameraPhotoUri != null) {
+            chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[]{cameraIntent});
+        }
+        return chooser;
+    }
+
+    private Uri createCameraPhotoUri() {
+        String stamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
+        ContentValues values = new ContentValues();
+        values.put(MediaStore.Images.Media.DISPLAY_NAME, "PROVI_" + stamp + ".jpg");
+        values.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            values.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Proviservicios");
+        }
+        return getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
     }
 
     private void requestAppPermissions() {
@@ -142,9 +192,17 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode != FILE_CHOOSER_REQUEST || filePathCallback == null) return;
 
-        Uri[] result = WebChromeClient.FileChooserParams.parseResult(resultCode, data);
+        Uri[] result = null;
+        if (resultCode == RESULT_OK) {
+            result = WebChromeClient.FileChooserParams.parseResult(resultCode, data);
+            if ((result == null || result.length == 0) && cameraPhotoUri != null) {
+                result = new Uri[]{cameraPhotoUri};
+            }
+        }
         filePathCallback.onReceiveValue(result);
         filePathCallback = null;
+        cameraPhotoUri = null;
+        hideSystemBars();
     }
 
     @Override
@@ -161,6 +219,22 @@ public class MainActivity extends Activity {
             startActivity(new Intent(Intent.ACTION_VIEW, uri));
         } catch (ActivityNotFoundException ignored) {
             Toast.makeText(this, "No se pudo abrir el enlace.", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void hideSystemBars() {
+        View decor = getWindow().getDecorView();
+        decor.setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                        | View.SYSTEM_UI_FLAG_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        );
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            getWindow().setNavigationBarColor(Color.TRANSPARENT);
+            getWindow().setStatusBarColor(Color.TRANSPARENT);
         }
     }
 }
