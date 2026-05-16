@@ -13,6 +13,8 @@ import android.os.Build;
 import android.os.Bundle;
 import android.provider.MediaStore;
 import android.view.View;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.webkit.CookieManager;
 import android.webkit.GeolocationPermissions;
 import android.webkit.PermissionRequest;
@@ -133,7 +135,11 @@ public class MainActivity extends Activity {
                 if (filePathCallback != null) filePathCallback.onReceiveValue(null);
                 filePathCallback = callback;
                 try {
-                    startActivityForResult(buildFileChooserIntent(params), FILE_CHOOSER_REQUEST);
+                    if (params.isCaptureEnabled()) {
+                        startActivityForResult(buildCameraIntent(), FILE_CHOOSER_REQUEST);
+                    } else {
+                        startActivityForResult(buildFileChooserIntent(params), FILE_CHOOSER_REQUEST);
+                    }
                 } catch (ActivityNotFoundException e) {
                     filePathCallback = null;
                     Toast.makeText(MainActivity.this, "No se encontro camara o selector de archivos.", Toast.LENGTH_LONG).show();
@@ -142,6 +148,20 @@ public class MainActivity extends Activity {
                 return true;
             }
         });
+    }
+
+    private Intent buildCameraIntent() {
+        Intent cameraIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+        cameraPhotoUri = createCameraPhotoUri();
+        if (cameraPhotoUri == null) {
+            throw new ActivityNotFoundException("No se pudo preparar la fotografia.");
+        }
+        cameraIntent.putExtra(MediaStore.EXTRA_OUTPUT, cameraPhotoUri);
+        cameraIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        if (cameraIntent.resolveActivity(getPackageManager()) == null) {
+            throw new ActivityNotFoundException("No hay camara disponible.");
+        }
+        return cameraIntent;
     }
 
     private Intent buildFileChooserIntent(WebChromeClient.FileChooserParams params) {
@@ -154,15 +174,15 @@ public class MainActivity extends Activity {
             galleryIntent.setType("image/*");
         }
 
-        Intent cameraIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
-        cameraPhotoUri = createCameraPhotoUri();
-        if (cameraPhotoUri != null) {
-            cameraIntent.putExtra(MediaStore.EXTRA_OUTPUT, cameraPhotoUri);
-            cameraIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        Intent cameraIntent = null;
+        try {
+            cameraIntent = buildCameraIntent();
+        } catch (ActivityNotFoundException e) {
+            cameraIntent = null;
         }
 
         Intent chooser = Intent.createChooser(galleryIntent, "Tomar o seleccionar foto");
-        if (cameraIntent.resolveActivity(getPackageManager()) != null && cameraPhotoUri != null) {
+        if (cameraIntent != null) {
             chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[]{cameraIntent});
         }
         return chooser;
@@ -223,6 +243,13 @@ public class MainActivity extends Activity {
     }
 
     private void hideSystemBars() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            WindowInsetsController controller = getWindow().getInsetsController();
+            if (controller != null) {
+                controller.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
+                controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+            }
+        }
         View decor = getWindow().getDecorView();
         decor.setSystemUiVisibility(
                 View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
