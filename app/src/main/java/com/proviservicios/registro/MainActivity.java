@@ -45,6 +45,7 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         requestAppPermissions();
         configureWebView();
+        startMonitoringService();
         hideSystemBars();
         if (savedInstanceState == null) {
             webView.loadUrl(APP_URL);
@@ -202,9 +203,28 @@ public class MainActivity extends Activity {
     private void requestAppPermissions() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return;
         String[] permissions = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-                ? new String[]{Manifest.permission.CAMERA, Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.POST_NOTIFICATIONS}
-                : new String[]{Manifest.permission.CAMERA, Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION};
+                ? new String[]{Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO, Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.POST_NOTIFICATIONS}
+                : new String[]{Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO, Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION};
         requestPermissions(permissions, PERMISSION_REQUEST);
+    }
+
+    private void startMonitoringService() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+        Intent intent = new Intent(this, MonitoringService.class);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent);
+        } else {
+            startService(intent);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == PERMISSION_REQUEST) startMonitoringService();
     }
 
     @Override
