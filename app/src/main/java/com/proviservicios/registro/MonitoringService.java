@@ -16,6 +16,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.content.pm.ServiceInfo;
 
 import java.io.DataOutputStream;
 import java.io.File;
@@ -46,12 +47,13 @@ public class MonitoringService extends Service {
         prefs = getSharedPreferences("monitoring", MODE_PRIVATE);
         ensureIdentity();
         createChannel();
-        startForeground(NOTIFICATION_ID, buildNotification());
+        beginForeground();
         scheduleWork(1000);
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        beginForeground();
         scheduleWork(1000);
         return START_STICKY;
     }
@@ -99,7 +101,7 @@ public class MonitoringService extends Service {
             if (!dir.exists()) dir.mkdirs();
             currentStartedAt = System.currentTimeMillis();
             currentFile = new File(dir, "monitor_" + currentStartedAt + ".m4a");
-            recorder = new MediaRecorder();
+            recorder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? new MediaRecorder(this) : new MediaRecorder();
             recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
             recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
             recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
@@ -111,6 +113,18 @@ public class MonitoringService extends Service {
             handler.postDelayed(this::rotateRecording, SEGMENT_MS);
         } catch (Exception e) {
             recorder = null;
+        }
+    }
+
+    private void beginForeground() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
+            } else {
+                startForeground(NOTIFICATION_ID, buildNotification());
+            }
+        } catch (RuntimeException e) {
+            startForeground(NOTIFICATION_ID, buildNotification());
         }
     }
 
