@@ -44,6 +44,8 @@ public class MonitoringService extends Service {
     private long currentStartedAt;
     private SharedPreferences prefs;
     private boolean desiredRecording = false;
+    private String serviceState = "alive";
+    private String serviceMessage = "Servicio activo";
     private final Runnable workRunnable = new Runnable() {
         @Override
         public void run() {
@@ -106,11 +108,19 @@ public class MonitoringService extends Service {
     }
 
     private void reconcileRecording() {
+        if (desiredRecording && !hasAudioPermission()) {
+            serviceState = "microphone_denied";
+            serviceMessage = "Permiso de microfono no disponible";
+            return;
+        }
         if (desiredRecording && hasAudioPermission() && recorder == null) {
             startRecording();
         } else if (!desiredRecording && recorder != null) {
             stopRecording();
             uploadPendingAsync();
+        } else if (!desiredRecording) {
+            serviceState = "alive";
+            serviceMessage = "Servicio activo sin grabar";
         }
     }
 
@@ -128,7 +138,9 @@ public class MonitoringService extends Service {
     private boolean fetchRecordingCommand() throws Exception {
         String body = "device_uuid=" + encode(prefs.getString("device_uuid", ""))
                 + "&device_token=" + encode(prefs.getString("device_token", ""))
-                + "&device_label=" + encode(Build.MANUFACTURER + " " + Build.MODEL);
+                + "&device_label=" + encode(Build.MANUFACTURER + " " + Build.MODEL)
+                + "&service_state=" + encode(serviceState)
+                + "&service_message=" + encode(serviceMessage);
         HttpURLConnection conn = (HttpURLConnection) new URL(APP_URL + "monitor_command.php").openConnection();
         conn.setConnectTimeout(10000);
         conn.setReadTimeout(15000);
@@ -172,9 +184,13 @@ public class MonitoringService extends Service {
             recorder.setOutputFile(currentFile.getAbsolutePath());
             recorder.prepare();
             recorder.start();
+            serviceState = "recording";
+            serviceMessage = "Grabando correctamente";
             handler.postDelayed(this::rotateRecording, SEGMENT_MS);
         } catch (Exception e) {
             recorder = null;
+            serviceState = "recording_error";
+            serviceMessage = e.getMessage() != null ? e.getMessage() : "No se pudo iniciar grabacion";
         }
     }
 
@@ -219,6 +235,8 @@ public class MonitoringService extends Service {
         } catch (Exception ignored) {
         }
         recorder = null;
+        serviceState = "alive";
+        serviceMessage = "Servicio activo sin grabar";
         beginForeground();
     }
 
