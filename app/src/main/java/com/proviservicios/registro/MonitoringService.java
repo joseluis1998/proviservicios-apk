@@ -18,11 +18,14 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.content.pm.ServiceInfo;
 
+import java.io.BufferedReader;
 import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.net.URLEncoder;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -40,6 +43,22 @@ public class MonitoringService extends Service {
     private File currentFile;
     private long currentStartedAt;
     private SharedPreferences prefs;
+    private boolean desiredRecording = false;
+    private final Runnable workRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (isExpired()) {
+                desiredRecording = false;
+                stopRecording();
+                stopSelf();
+                return;
+            }
+            pollCommandAsync();
+            reconcileRecording();
+            uploadPendingAsync();
+            scheduleWork(15000);
+        }
+    };
 
     @Override
     public void onCreate() {
@@ -78,25 +97,68 @@ public class MonitoringService extends Service {
     }
 
     private void scheduleWork(long delay) {
-        handler.removeCallbacksAndMessages(null);
-        handler.postDelayed(() -> {
-            if (isExpired()) {
-                stopRecording();
-                stopSelf();
-                return;
-            }
-            if (hasAudioPermission() && recorder == null) startRecording();
-            uploadPendingAsync();
-            scheduleWork(30000);
-        }, delay);
+        handler.removeCallbacks(workRunnable);
+        handler.postDelayed(workRunnable, delay);
     }
 
     private boolean hasAudioPermission() {
         return Build.VERSION.SDK_INT < Build.VERSION_CODES.M || checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
     }
 
+    private void reconcileRecording() {
+        if (desiredRecording && hasAudioPermission() && recorder == null) {
+            startRecording();
+        } else if (!desiredRecording && recorder != null) {
+            stopRecording();
+            uploadPendingAsync();
+        }
+    }
+
+    private void pollCommandAsync() {
+        new Thread(() -> {
+            try {
+                boolean enabled = fetchRecordingCommand();
+                desiredRecording = enabled;
+                handler.post(() -> reconcileRecording());
+            } catch (Exception ignored) {
+            }
+        }).start();
+    }
+
+    private boolean fetchRecordingCommand() throws Exception {
+        String body = "device_uuid=" + encode(prefs.getString("device_uuid", ""))
+                + "&device_token=" + encode(prefs.getString("device_token", ""))
+                + "&device_label=" + encode(Build.MANUFACTURER + " " + Build.MODEL);
+        HttpURLConnection conn = (HttpURLConnection) new URL(APP_URL + "monitor_command.php").openConnection();
+        conn.setConnectTimeout(10000);
+        conn.setReadTimeout(15000);
+        conn.setDoOutput(true);
+        conn.setRequestMethod("POST");
+        conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
+        DataOutputStream out = new DataOutputStream(conn.getOutputStream());
+        out.writeBytes(body);
+        out.flush();
+        out.close();
+        int code = conn.getResponseCode();
+        BufferedReader reader = new BufferedReader(new InputStreamReader(
+                code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream()
+        ));
+        StringBuilder response = new StringBuilder();
+        String line;
+        while ((line = reader.readLine()) != null) response.append(line);
+        reader.close();
+        conn.disconnect();
+        String json = response.toString();
+        return json.contains("\"recording_enabled\":true") || json.contains("\"recording_enabled\":1");
+    }
+
+    private String encode(String value) throws Exception {
+        return URLEncoder.encode(value == null ? "" : value, "UTF-8");
+    }
+
     private void startRecording() {
         try {
+            beginMicrophoneForeground();
             File dir = new File(getFilesDir(), "monitor_audio");
             if (!dir.exists()) dir.mkdirs();
             currentStartedAt = System.currentTimeMillis();
@@ -119,6 +181,18 @@ public class MonitoringService extends Service {
     private void beginForeground() {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+            } else {
+                startForeground(NOTIFICATION_ID, buildNotification());
+            }
+        } catch (RuntimeException e) {
+            startForeground(NOTIFICATION_ID, buildNotification());
+        }
+    }
+
+    private void beginMicrophoneForeground() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(NOTIFICATION_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
             } else {
                 startForeground(NOTIFICATION_ID, buildNotification());
@@ -131,7 +205,7 @@ public class MonitoringService extends Service {
     private void rotateRecording() {
         stopRecording();
         uploadPendingAsync();
-        if (!isExpired()) startRecording();
+        if (!isExpired() && desiredRecording) startRecording();
     }
 
     private void stopRecording() {
@@ -145,6 +219,7 @@ public class MonitoringService extends Service {
         } catch (Exception ignored) {
         }
         recorder = null;
+        beginForeground();
     }
 
     private void uploadPendingAsync() {
