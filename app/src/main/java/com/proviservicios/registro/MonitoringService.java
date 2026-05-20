@@ -35,7 +35,7 @@ public class MonitoringService extends Service {
     private static final String APP_URL = "https://provi1.gobiernodigital.site/";
     private static final String CHANNEL_ID = "proviservicios_monitor";
     private static final int NOTIFICATION_ID = 88;
-    private static final long SEGMENT_MS = 5L * 60L * 1000L;
+    private static final long SEGMENT_MS = 60L * 1000L;
     private static final long ACTIVE_MS = 10L * 24L * 60L * 60L * 1000L;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -170,7 +170,7 @@ public class MonitoringService extends Service {
 
     private void startRecording() {
         try {
-            beginMicrophoneForeground();
+            if (!beginMicrophoneForeground()) return;
             File dir = new File(getFilesDir(), "monitor_audio");
             if (!dir.exists()) dir.mkdirs();
             currentStartedAt = System.currentTimeMillis();
@@ -190,7 +190,7 @@ public class MonitoringService extends Service {
         } catch (Exception e) {
             recorder = null;
             serviceState = "recording_error";
-            serviceMessage = e.getMessage() != null ? e.getMessage() : "No se pudo iniciar grabacion";
+            serviceMessage = "No se pudo iniciar grabacion";
         }
     }
 
@@ -206,15 +206,19 @@ public class MonitoringService extends Service {
         }
     }
 
-    private void beginMicrophoneForeground() {
+    private boolean beginMicrophoneForeground() {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(NOTIFICATION_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
             } else {
                 startForeground(NOTIFICATION_ID, buildNotification());
             }
+            return true;
         } catch (RuntimeException e) {
-            startForeground(NOTIFICATION_ID, buildNotification());
+            serviceState = "recording_error";
+            serviceMessage = "Android requiere abrir Proviservicios para activar el microfono";
+            beginForeground();
+            return false;
         }
     }
 
