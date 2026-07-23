@@ -6,8 +6,13 @@ import android.app.Activity;
 import android.content.ContentValues;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.NetworkInfo;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -18,8 +23,11 @@ import android.view.WindowInsetsController;
 import android.webkit.CookieManager;
 import android.webkit.GeolocationPermissions;
 import android.webkit.PermissionRequest;
+import android.webkit.ServiceWorkerController;
+import android.webkit.ServiceWorkerWebSettings;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -27,28 +35,36 @@ import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.Toast;
 
+import org.json.JSONObject;
+
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 
 public class MainActivity extends Activity {
     private static final String APP_URL = "https://provi.gobiernodigital.site/";
+    private static final String PREFS_NAME = "proviservicios_web_cache";
+    private static final String PREF_LAST_HTML = "last_html";
+    private static final String PREF_LAST_URL = "last_url";
     private static final int PERMISSION_REQUEST = 10;
     private static final int FILE_CHOOSER_REQUEST = 20;
 
     private WebView webView;
     private ValueCallback<Uri[]> filePathCallback;
     private Uri cameraPhotoUri;
+    private SharedPreferences webCachePrefs;
+    private boolean loadingOfflineSnapshot = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        webCachePrefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         requestAppPermissions();
         configureWebView();
         startMonitoringService();
         hideSystemBars();
         if (savedInstanceState == null) {
-            webView.loadUrl(APP_URL);
+            loadInitialPage();
         } else {
             webView.restoreState(savedInstanceState);
         }
@@ -64,6 +80,9 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         startMonitoringService();
+        if (webView != null && !isOnline() && isAndroidErrorPage(webView.getUrl())) {
+            loadOfflineSnapshot();
+        }
     }
 
     @Override
@@ -89,10 +108,11 @@ public class MainActivity extends Activity {
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setAllowFileAccess(true);
         settings.setAllowContentAccess(true);
-        settings.setCacheMode(WebSettings.LOAD_DEFAULT);
+        settings.setCacheMode(isOnline() ? WebSettings.LOAD_DEFAULT : WebSettings.LOAD_CACHE_ELSE_NETWORK);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             settings.setSafeBrowsingEnabled(true);
         }
+        configureServiceWorker();
 
         CookieManager.getInstance().setAcceptCookie(true);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -119,6 +139,30 @@ public class MainActivity extends Activity {
                 }
                 openExternal(uri);
                 return true;
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                if (loadingOfflineSnapshot || url == null || !url.startsWith(APP_URL) || isAndroidErrorPage(url)) {
+                    return;
+                }
+                saveCurrentPageSnapshot(url);
+            }
+
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                super.onReceivedError(view, request, error);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && request != null && request.isForMainFrame()) {
+                    loadOfflineSnapshot();
+                }
+            }
+
+            @Override
+            @SuppressWarnings("deprecation")
+            public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
+                super.onReceivedError(view, errorCode, description, failingUrl);
+                loadOfflineSnapshot();
             }
         });
 
@@ -155,6 +199,127 @@ public class MainActivity extends Activity {
                 return true;
             }
         });
+    }
+
+    private void configureServiceWorker() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            return;
+        }
+        ServiceWorkerWebSettings serviceWorkerSettings = ServiceWorkerController.getInstance().getServiceWorkerWebSettings();
+        serviceWorkerSettings.setAllowContentAccess(true);
+        serviceWorkerSettings.setAllowFileAccess(true);
+        serviceWorkerSettings.setBlockNetworkLoads(false);
+        serviceWorkerSettings.setCacheMode(isOnline() ? WebSettings.LOAD_DEFAULT : WebSettings.LOAD_CACHE_ELSE_NETWORK);
+    }
+
+    private void loadInitialPage() {
+        if (!isOnline() && loadOfflineSnapshot()) {
+            return;
+        }
+        loadingOfflineSnapshot = false;
+        webView.getSettings().setCacheMode(WebSettings.LOAD_DEFAULT);
+        webView.loadUrl(APP_URL);
+    }
+
+    private boolean loadOfflineSnapshot() {
+        if (webView == null) {
+            return false;
+        }
+        String html = webCachePrefs.getString(PREF_LAST_HTML, "");
+        String lastUrl = webCachePrefs.getString(PREF_LAST_URL, APP_URL);
+        if (html == null || html.trim().isEmpty()) {
+            loadingOfflineSnapshot = false;
+            webView.loadDataWithBaseURL(
+                    APP_URL,
+                    buildNoCacheOfflineHtml(),
+                    "text/html",
+                    "UTF-8",
+                    APP_URL
+            );
+            return false;
+        }
+        loadingOfflineSnapshot = true;
+        webView.getSettings().setCacheMode(WebSettings.LOAD_CACHE_ELSE_NETWORK);
+        webView.loadDataWithBaseURL(
+                APP_URL,
+                html,
+                "text/html",
+                "UTF-8",
+                lastUrl == null || lastUrl.isEmpty() ? APP_URL : lastUrl
+        );
+        Toast.makeText(this, "Modo offline activo. Los datos se guardaran en el telefono.", Toast.LENGTH_LONG).show();
+        return true;
+    }
+
+    private void saveCurrentPageSnapshot(String url) {
+        if (webView == null) {
+            return;
+        }
+        webView.evaluateJavascript(
+                "(function(){try{return JSON.stringify({html:'<!doctype html>\\n'+document.documentElement.outerHTML,url:location.href});}catch(e){return '';}})();",
+                value -> {
+                    try {
+                        if (value == null || value.equals("null") || value.length() < 20) {
+                            return;
+                        }
+                        String jsonText = new JSONObject("{\"value\":" + value + "}").optString("value", "");
+                        if (jsonText.isEmpty()) {
+                            return;
+                        }
+                        JSONObject payload = new JSONObject(jsonText);
+                        String html = payload.optString("html", "");
+                        String pageUrl = payload.optString("url", url);
+                        if (html.contains("Sistema de informacion") && !html.contains("serverOfflineUser")) {
+                            return;
+                        }
+                        if (html.length() < 2000) {
+                            return;
+                        }
+                        webCachePrefs.edit()
+                                .putString(PREF_LAST_HTML, html)
+                                .putString(PREF_LAST_URL, pageUrl)
+                                .apply();
+                    } catch (Exception ignored) {
+                        // Offline snapshot is only a fallback. Normal WebView cache still remains available.
+                    }
+                }
+        );
+    }
+
+    private boolean isAndroidErrorPage(String url) {
+        return url == null || url.startsWith("chrome-error://") || url.startsWith("about:");
+    }
+
+    @SuppressWarnings("deprecation")
+    private boolean isOnline() {
+        ConnectivityManager manager = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+        if (manager == null) {
+            return true;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            Network network = manager.getActiveNetwork();
+            if (network == null) {
+                return false;
+            }
+            NetworkCapabilities capabilities = manager.getNetworkCapabilities(network);
+            return capabilities != null
+                    && (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                    || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+                    || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET));
+        }
+        NetworkInfo info = manager.getActiveNetworkInfo();
+        return info != null && info.isConnected();
+    }
+
+    private String buildNoCacheOfflineHtml() {
+        return "<!doctype html><html lang=\"es\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+                + "<title>Proviservicios sin conexion</title>"
+                + "<style>body{margin:0;font-family:Arial,sans-serif;background:#eef9fb;color:#0b2442;display:grid;min-height:100vh;place-items:center;padding:24px}"
+                + ".card{max-width:460px;background:#fff;border:1px solid #cce7ef;border-radius:18px;padding:24px;box-shadow:0 20px 45px rgba(12,55,85,.12)}"
+                + "img{max-width:240px;width:70%;display:block;margin:0 auto 18px}h1{font-size:24px;margin:0 0 12px}p{line-height:1.45;color:#46627c}"
+                + "</style></head><body><div class=\"card\"><img src=\"logo-proviservicios.png\" alt=\"Proviservicios\"><h1>Modo offline pendiente</h1>"
+                + "<p>Este telefono todavia no tiene una copia local del sistema. Abra la aplicacion una vez con internet e inicie sesion; despues podra volver a entrar sin conexion.</p>"
+                + "</div></body></html>";
     }
 
     private Intent buildCameraIntent() {
