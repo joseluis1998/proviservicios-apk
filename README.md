@@ -2,7 +2,7 @@
 
 Aplicacion Android tipo WebView para abrir:
 
-https://provi1.gobiernodigital.site/
+https://provi.gobiernodigital.site/
 
 ## Requisitos para compilar
 
