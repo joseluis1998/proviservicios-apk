@@ -32,7 +32,7 @@ import java.util.Date;
 import java.util.Locale;
 
 public class MainActivity extends Activity {
-    private static final String APP_URL = "https://provi1.gobiernodigital.site/";
+    private static final String APP_URL = "https://provi.gobiernodigital.site/";
     private static final int PERMISSION_REQUEST = 10;
     private static final int FILE_CHOOSER_REQUEST = 20;
 
