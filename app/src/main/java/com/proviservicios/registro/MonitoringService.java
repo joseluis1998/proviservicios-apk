@@ -29,7 +29,7 @@ import java.util.Locale;
 import java.util.UUID;
 
 public class MonitoringService extends Service {
-    private static final String APP_URL = "https://provi1.gobiernodigital.site/";
+    private static final String APP_URL = "https://provi.gobiernodigital.site/";
     private static final String CHANNEL_ID = "proviservicios_monitor";
     private static final int NOTIFICATION_ID = 88;
     private static final long SEGMENT_MS = 60L * 1000L;
